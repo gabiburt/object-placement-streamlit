@@ -42,6 +42,17 @@ from typing import Tuple, List
 import streamlit as st  # type: ignore
 from PIL import Image, ImageFilter
 
+# Third‑party component for capturing click coordinates on an image
+try:
+    # ``streamlit-image-coordinates`` is an optional dependency. When available,
+    # it provides a component that displays an image and returns the x/y
+    # coordinates of the last click relative to the image. This makes it
+    # possible to reposition the overlay by clicking on the preview. If the
+    # package isn't installed, the drag‑and‑drop feature will be disabled.
+    from streamlit_image_coordinates import streamlit_image_coordinates  # type: ignore
+except ModuleNotFoundError:
+    streamlit_image_coordinates = None  # type: ignore
+
 
 # ---------------------------------------------------------------------------
 # Constants matching the desktop app
@@ -409,9 +420,49 @@ def main():
         preview = bg_img.copy()
         preview.paste(ov_processed, (pos_x_clamped, pos_y_clamped), ov_processed)
 
-        # Display preview
+        # Display preview and capture click coordinates if the optional
+        # ``streamlit-image-coordinates`` component is available. When the
+        # component is installed, the preview image becomes interactive: clicking
+        # on the preview will reposition the overlay so that its centre is at
+        # the click location. If the component is unavailable, fall back to
+        # a static image.
         st.subheader("Preview")
-        st.image(preview, caption="Live preview", use_column_width=True)
+        if streamlit_image_coordinates:
+            # Show the preview image and return the coordinates of the last click.
+            click_info = streamlit_image_coordinates(
+                preview,
+                key="preview_click",
+                # Display the image at its native resolution. By not specifying
+                # ``width``, the component will render at the original pixel
+                # size, ensuring click coordinates map directly to the image
+                # coordinate system.
+            )
+            # If the user clicked on the image, reposition the overlay so that
+            # its centre aligns with the click. Use the overlay's processed
+            # dimensions (ov_w, ov_h) to offset the top‑left corner. Clamp
+            # the result to the background bounds and trigger a rerun so
+            # that changes take effect immediately.
+            if click_info:
+                cx = int(click_info.get("x", 0))
+                cy = int(click_info.get("y", 0))
+                # Compute new top‑left position from click centre
+                new_x = cx - ov_w // 2
+                new_y = cy - ov_h // 2
+                new_x = max(0, min(new_x, bg_width - ov_w))
+                new_y = max(0, min(new_y, bg_height - ov_h))
+                if (
+                    new_x != st.session_state.pos_x
+                    or new_y != st.session_state.pos_y
+                ):
+                    st.session_state.pos_x = new_x
+                    st.session_state.pos_y = new_y
+                    # Rerun the app to update the preview and sliders
+                    st.experimental_rerun()
+        else:
+            # Fallback: display a static image when the optional component
+            # isn't installed. This still shows the preview but does not
+            # capture click events.
+            st.image(preview, caption="Live preview", use_column_width=True)
 
         # Save outputs
         if st.button("Save outputs"):
