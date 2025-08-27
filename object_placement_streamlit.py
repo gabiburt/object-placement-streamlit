@@ -272,63 +272,128 @@ def main():
         bg_img = Image.open(bg_file).convert("RGBA")
         ov_img_orig = Image.open(ov_file).convert("RGBA")
 
-        # Compute slider ranges
+        # Compute background dimensions
         bg_width, bg_height = bg_img.size
 
-        st.sidebar.header("Overlay adjustments")
-        # Desired width (pixels). Limit between 8 and min(bg_width, 2×ov_width)
+        # Initialise session state for interactive controls on first run
+        # We defer initialisation until files are loaded so we can compute sensible defaults
         max_w_default = min(bg_width, ov_img_orig.width * 2)
         default_w = min(bg_width // 4, max_w_default)
-        overlay_width = st.sidebar.slider(
+        if "overlay_width" not in st.session_state:
+            st.session_state.overlay_width = int(default_w)
+        # Starting overlay position (top‑left) ensures the overlay is visible
+        if "pos_x" not in st.session_state:
+            st.session_state.pos_x = 0
+        if "pos_y" not in st.session_state:
+            st.session_state.pos_y = 0
+        if "angle" not in st.session_state:
+            st.session_state.angle = 0.0
+        if "flip_h" not in st.session_state:
+            st.session_state.flip_h = False
+        if "flip_v" not in st.session_state:
+            st.session_state.flip_v = False
+        if "output_dir" not in st.session_state:
+            st.session_state.output_dir = "output"
+
+        # Sidebar controls grouped by functionality
+        st.sidebar.header("Overlay adjustments")
+
+        # --- Size controls ---
+        size_cols = st.sidebar.columns(2)
+        if size_cols[0].button("Smaller (–)"):
+            # Decrease width by ~10% but do not go below 8 pixels
+            st.session_state.overlay_width = max(8, int(st.session_state.overlay_width / 1.10))
+        if size_cols[1].button("Bigger (+)"):
+            # Increase width by ~10% but do not exceed the maximum allowed
+            st.session_state.overlay_width = min(int(max_w_default), int(st.session_state.overlay_width * 1.10))
+        st.session_state.overlay_width = st.sidebar.slider(
             "Overlay width (px)",
             min_value=8,
             max_value=int(max_w_default),
-            value=int(default_w),
+            value=int(st.session_state.overlay_width),
             step=1,
+            key="overlay_width_slider",
         )
-        # Position controls
-        pos_x = st.sidebar.slider(
-            "Overlay X position",
-            min_value=0,
-            max_value=bg_width,
-            value=0,
-            step=1,
+
+        # --- Position controls ---
+        st.sidebar.subheader("Position")
+        # Nudge buttons
+        pos_nudge = st.sidebar.columns(3)
+        # left arrow
+        if pos_nudge[0].button("←"):
+            st.session_state.pos_x = max(0, st.session_state.pos_x - 10)
+        # up and down arrows share the middle column vertically via additional columns
+        with pos_nudge[1]:
+            if st.button("↑"):
+                st.session_state.pos_y = max(0, st.session_state.pos_y - 10)
+            if st.button("↓"):
+                st.session_state.pos_y = min(bg_height, st.session_state.pos_y + 10)
+        # right arrow
+        if pos_nudge[2].button("→"):
+            st.session_state.pos_x = min(bg_width, st.session_state.pos_x + 10)
+        # Sliders bound to session state
+        st.session_state.pos_x = st.sidebar.slider(
+            "X position", 0, bg_width, int(st.session_state.pos_x), 1, key="pos_x_slider"
         )
-        pos_y = st.sidebar.slider(
-            "Overlay Y position",
-            min_value=0,
-            max_value=bg_height,
-            value=0,
-            step=1,
+        st.session_state.pos_y = st.sidebar.slider(
+            "Y position", 0, bg_height, int(st.session_state.pos_y), 1, key="pos_y_slider"
         )
-        # Rotation
-        angle = st.sidebar.slider(
-            "Rotation (degrees)",
-            min_value=-180,
-            max_value=180,
-            value=0,
-            step=1,
+
+        # --- Rotation controls ---
+        st.sidebar.subheader("Rotation")
+        rot_cols = st.sidebar.columns(5)
+        if rot_cols[0].button("−90°"):
+            st.session_state.angle = (st.session_state.angle - 90) % 360
+        if rot_cols[1].button("−5°"):
+            st.session_state.angle -= 5
+        if rot_cols[2].button("Reset"):
+            st.session_state.angle = 0
+        if rot_cols[3].button("+5°"):
+            st.session_state.angle += 5
+        if rot_cols[4].button("+90°"):
+            st.session_state.angle = (st.session_state.angle + 90) % 360
+        # Normalise angle to [-180, 180]
+        ang = st.session_state.angle
+        if ang >= 180:
+            ang -= 360
+        if ang < -180:
+            ang += 360
+        st.session_state.angle = ang
+        st.session_state.angle = st.sidebar.slider(
+            "Angle (degrees)", -180.0, 180.0, float(st.session_state.angle), 1.0, key="angle_slider"
         )
-        # Flips
-        flip_h = st.sidebar.checkbox("Flip horizontally", value=False)
-        flip_v = st.sidebar.checkbox("Flip vertically", value=False)
+
+        # --- Flips ---
+        st.sidebar.subheader("Flip")
+        st.session_state.flip_h = st.sidebar.checkbox(
+            "Flip horizontally", value=st.session_state.flip_h, key="flip_h"
+        )
+        st.session_state.flip_v = st.sidebar.checkbox(
+            "Flip vertically", value=st.session_state.flip_v, key="flip_v"
+        )
+
+        # --- Output directory ---
+        st.sidebar.subheader("Output directory")
+        st.session_state.output_dir = st.sidebar.text_input(
+            "Relative path to save outputs", value=st.session_state.output_dir, key="output_dir"
+        )
 
         # Note: For simplicity, we allow the overlay to extend beyond the background; it will be clipped.
         # Process overlay without contour (for preview) and with contour (for saving)
         ov_processed = process_overlay(
             overlay=ov_img_orig,
-            target_w=overlay_width,
-            angle_deg=float(angle),
-            flip_h=flip_h,
-            flip_v=flip_v,
+            target_w=st.session_state.overlay_width,
+            angle_deg=float(st.session_state.angle),
+            flip_h=st.session_state.flip_h,
+            flip_v=st.session_state.flip_v,
             contour=False,
         )
         ov_with_contour = process_overlay(
             overlay=ov_img_orig,
-            target_w=overlay_width,
-            angle_deg=float(angle),
-            flip_h=flip_h,
-            flip_v=flip_v,
+            target_w=st.session_state.overlay_width,
+            angle_deg=float(st.session_state.angle),
+            flip_h=st.session_state.flip_h,
+            flip_v=st.session_state.flip_v,
             contour=True,
             contour_width=CONTOUR_WIDTH_DEFAULT,
             inner_color=CONTOUR_RGBA,
@@ -337,8 +402,8 @@ def main():
 
         # Clip position if overlay extends beyond background
         ov_w, ov_h = ov_processed.size
-        pos_x_clamped = max(0, min(pos_x, bg_width - ov_w))
-        pos_y_clamped = max(0, min(pos_y, bg_height - ov_h))
+        pos_x_clamped = max(0, min(int(st.session_state.pos_x), bg_width - ov_w))
+        pos_y_clamped = max(0, min(int(st.session_state.pos_y), bg_height - ov_h))
 
         # Compose preview: draw plain overlay over background
         preview = bg_img.copy()
@@ -350,8 +415,8 @@ def main():
 
         # Save outputs
         if st.button("Save outputs"):
-            # Create output directories
-            root = Path.cwd() / "output"
+            # Create output directories relative to the chosen root
+            root = Path.cwd() / st.session_state.output_dir
             canvas_contour_dir = root / "Canvas_contour"
             canvas_grey_dir = root / "Canvas_grey"
             objects_dir = root / "objects"
